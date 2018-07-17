@@ -13,8 +13,9 @@ import (
 	"path"
 	"strconv"
 	"time"
+	"sync"
 
-	ss "github.com/shadowsocks/shadowsocks-go/shadowsocks"
+	ss "github.com/binbibi/shadowsocks-go/shadowsocks"
 )
 
 var debug ss.DebugLog
@@ -288,6 +289,7 @@ func handleConnection(conn net.Conn) {
 		}
 	}()
 
+	var wg sync.WaitGroup
 	var err error = nil
 	if err = handShake(conn); err != nil {
 		log.Println("socks handshake:", err)
@@ -320,8 +322,10 @@ func handleConnection(conn net.Conn) {
 		}
 	}()
 
-	go ss.PipeThenClose(conn, remote, nil)
-	ss.PipeThenClose(remote, conn, nil)
+	go ss.PipeThenClose(conn, remote, nil, &wg)
+	go ss.PipeThenClose(remote, conn, nil, &wg)
+	wg.Wait()
+
 	closed = true
 	debug.Println("closed connection to", addr)
 }

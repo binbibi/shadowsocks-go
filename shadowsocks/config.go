@@ -95,6 +95,7 @@ func SetDebug(d DebugLog) {
 
 // Useful for command line to override options specified in config file
 // Debug is not updated.
+// 没看明白这个玩意
 func UpdateConfig(old, new *Config) {
 	// Using reflection here is not necessary, but it's a good exercise.
 	// For more information on reflections in Go, read "The Laws of Reflection"

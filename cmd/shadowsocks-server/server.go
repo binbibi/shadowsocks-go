@@ -19,7 +19,7 @@ import (
 	"syscall"
 	"time"
 
-	ss "github.com/shadowsocks/shadowsocks-go/shadowsocks"
+	ss "github.com/binbibi/shadowsocks-go/shadowsocks"
 )
 
 const (
@@ -43,7 +43,7 @@ var sanitizeIps bool
 var udp bool
 var managerAddr string
 
-func getRequest(conn *ss.Conn) (host string, err error) {
+func getClientRequest(conn *ss.Conn) (host string, err error) {
 	ss.SetReadTimeout(conn)
 
 	// buf size should at least have the same size with the largest possible
@@ -106,8 +106,9 @@ func sanitizeAddr(addr net.Addr) string {
   }
 }
 
-func handleConnection(conn *ss.Conn, port string) {
-	var host string
+func handleConnection(clientconn *ss.Conn, port string) {
+	var remoteserverhost string
+	var wg sync.WaitGroup
 
 	connCnt++ // this maybe not accurate, but should be enough
 	if connCnt-nextLogConnCnt >= 0 {
@@ -121,60 +122,70 @@ func handleConnection(conn *ss.Conn, port string) {
 	// function arguments are always evaluated, so surround debug statement
 	// with if statement
 	if debug {
-		debug.Printf("new client %s->%s\n", sanitizeAddr(conn.RemoteAddr()), conn.LocalAddr())
+		debug.Printf("new client %s->%s\n", sanitizeAddr(clientconn.RemoteAddr()), clientconn.LocalAddr())
 	}
 	closed := false
 	defer func() {
 		if debug {
-			debug.Printf("closed pipe %s<->%s\n", sanitizeAddr(conn.RemoteAddr()), host)
+			debug.Printf("closed pipe %s<->%s\n", sanitizeAddr(clientconn.RemoteAddr()), remoteserverhost)
 		}
 		connCnt--
 		if !closed {
-			conn.Close()
+			clientconn.Close()
 		}
 	}()
 
-	host, err := getRequest(conn)
+	// 获取客户端的请求中的数据
+	remoteserverhost, err := getClientRequest(clientconn)
 	if err != nil {
-		log.Println("error getting request", sanitizeAddr(conn.RemoteAddr()), conn.LocalAddr(), err)
+		log.Println("error getting request", sanitizeAddr(clientconn.RemoteAddr()), clientconn.LocalAddr(), err)
 		closed = true
 		return
 	}
-	// ensure the host does not contain some illegal characters, NUL may panic on Win32
-	if strings.ContainsRune(host, 0x00) {
+	// ensure the remoteserverhost does not contain some illegal characters, NUL may panic on Win32
+	if strings.ContainsRune(remoteserverhost, 0x00) {
 		log.Println("invalid domain name.")
 		closed = true
 		return
 	}
-	debug.Println("connecting", host)
-	remote, err := net.Dial("tcp", host)
+	debug.Println("connecting", remoteserverhost)
+
+	// 和远端的服务器建立连接
+	remoteconn, err := net.Dial("tcp", remoteserverhost)
 	if err != nil {
 		if ne, ok := err.(*net.OpError); ok && (ne.Err == syscall.EMFILE || ne.Err == syscall.ENFILE) {
 			// log too many open file error
 			// EMFILE is process reaches open file limits, ENFILE is system limit
 			log.Println("dial error:", err)
 		} else {
-			log.Println("error connecting to:", host, err)
+			log.Println("error connecting to:", remoteserverhost, err)
 		}
 		return
 	}
 	defer func() {
 		if !closed {
-			remote.Close()
+			remoteconn.Close()
 		}
 	}()
 	if debug {
-		debug.Printf("piping %s<->%s", sanitizeAddr(conn.RemoteAddr()), host)
+		debug.Printf("piping %s<->%s", sanitizeAddr(clientconn.RemoteAddr()), remoteserverhost)
 	}
+
+	// xian把客户端给代理的数据给远端的服务端
 	go func() {
-		ss.PipeThenClose(conn, remote, func(Traffic int) {
+		ss.PipeThenClose(clientconn, remoteconn, func(Traffic int){
 			passwdManager.addTraffic(port, Traffic)
-		})
+		}, &wg)
 	}()
 
-	ss.PipeThenClose(remote, conn, func(Traffic int) {
-		passwdManager.addTraffic(port, Traffic)
-	})
+	// 接受远端服务器的数据给客户端
+	go func() {
+		ss.PipeThenClose(remoteconn, clientconn, func(Traffic int) {
+			passwdManager.addTraffic(port, Traffic)
+		}, &wg)
+	}()
+
+	wg.Wait()
 
 	closed = true
 	return
@@ -344,16 +355,16 @@ func waitSignal() {
 }
 
 func run(port, password string) {
-	ln, err := net.Listen("tcp", ":"+port)
+	localln, err := net.Listen("tcp", ":"+port)
 	if err != nil {
 		log.Printf("error listening port %v: %v\n", port, err)
 		os.Exit(1)
 	}
-	passwdManager.add(port, password, ln)
+	passwdManager.add(port, password, localln)
 	var cipher *ss.Cipher
 	log.Printf("server listening port %v ...\n", port)
 	for {
-		conn, err := ln.Accept()
+		clientconn, err := localln.Accept()
 		if err != nil {
 			// listener maybe closed to update password
 			debug.Printf("accept error: %v\n", err)
@@ -365,11 +376,11 @@ func run(port, password string) {
 			cipher, err = ss.NewCipher(config.Method, password)
 			if err != nil {
 				log.Printf("Error generating cipher for port: %s %v\n", port, err)
-				conn.Close()
+				clientconn.Close()
 				continue
 			}
 		}
-		go handleConnection(ss.NewConn(conn, cipher.Copy()), port)
+		go handleConnection(ss.NewConn(clientconn, cipher.Copy()), port)
 	}
 }
 
@@ -461,9 +472,11 @@ func main() {
 			os.Exit(1)
 		}
 		config = &cmdConfig
-		ss.UpdateConfig(config, config)
+		// 这个代码很无聊
+		// ss.UpdateConfig(config, config)
 	} else {
-		ss.UpdateConfig(config, &cmdConfig)
+		// 这个代码很无聊
+		// ss.UpdateConfig(config, &cmdConfig)
 	}
 	if config.Method == "" {
 		config.Method = "aes-256-cfb"
