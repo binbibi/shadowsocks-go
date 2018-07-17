@@ -443,6 +443,7 @@ func main() {
 	var cmdConfig ss.Config
 	var printVer bool
 	var core int
+	var args []string
 
 	flag.BoolVar(&printVer, "version", false, "print version")
 	flag.StringVar(&configFile, "c", "config.json", "specify config file")
@@ -456,6 +457,13 @@ func main() {
 	flag.BoolVar(&udp, "u", false, "UDP Relay")
 	flag.StringVar(&managerAddr, "manager-address", "", "shadowsocks manager listening address")
 	flag.Parse()
+
+	args = flag.Args()
+	if len(args) < 1{
+		fmt.Println("Too few arguments")
+		fmt.Println("Usage Follow args...")
+		flag.PrintDefaults()
+	}
 
 	if printVer {
 		ss.PrintVersion()
