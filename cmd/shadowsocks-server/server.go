@@ -462,6 +462,7 @@ func main() {
 		fmt.Println("Too few arguments")
 		fmt.Println("Usage Follow args...")
 		flag.PrintDefaults()
+		os.Exit(0)
 	}
 
 	if printVer {
